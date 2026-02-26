@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings  # noqa: F401
+from app.routers import tickets, knowledge_base, export
 
 
 @asynccontextmanager
@@ -32,6 +33,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Routers
+app.include_router(tickets.router)
+app.include_router(knowledge_base.router)
+app.include_router(export.router)
 
 
 @app.get("/health")
