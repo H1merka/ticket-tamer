@@ -12,8 +12,10 @@ from app.services import ticket_service
 router = APIRouter(prefix="/api/v1/export", tags=["export"])
 
 TICKET_COLUMNS = [
-    "id", "email_from", "subject", "category", "priority",
-    "sentiment", "status", "is_auto", "response", "created_at", "responded_at",
+    "id", "created_at", "fio", "organization", "phone", "email_from",
+    "serial_numbers", "device_type", "sentiment", "confidence",
+    "description", "category", "priority", "status", "is_auto",
+    "response", "responded_at",
 ]
 
 
@@ -32,7 +34,13 @@ async def export_csv(
     writer = csv.DictWriter(buf, fieldnames=TICKET_COLUMNS)
     writer.writeheader()
     for t in tickets:
-        writer.writerow({col: getattr(t, col) for col in TICKET_COLUMNS})
+        row = {}
+        for col in TICKET_COLUMNS:
+            val = getattr(t, col)
+            if isinstance(val, list):
+                val = ", ".join(str(v) for v in val)
+            row[col] = val
+        writer.writerow(row)
 
     buf.seek(0)
     filename = f"tickets_{datetime.now():%Y%m%d_%H%M%S}.csv"
@@ -61,7 +69,13 @@ async def export_xlsx(
     ws.title = "Tickets"
     ws.append(TICKET_COLUMNS)
     for t in tickets:
-        ws.append([getattr(t, col) for col in TICKET_COLUMNS])
+        row = []
+        for col in TICKET_COLUMNS:
+            val = getattr(t, col)
+            if isinstance(val, list):
+                val = ", ".join(str(v) for v in val)
+            row.append(val)
+        ws.append(row)
 
     buf = io.BytesIO()
     wb.save(buf)

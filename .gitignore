@@ -208,3 +208,7 @@ __marimo__/
 
 # Extra
 .github/
+
+# Docs
+extra/
+specification.txt

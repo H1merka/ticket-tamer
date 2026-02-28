@@ -16,9 +16,24 @@ class KnowledgeBaseArticle(Base):
     question: Mapped[str] = mapped_column(Text, nullable=False)
     answer: Mapped[str] = mapped_column(Text, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Source / priority fields
+    source_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="official_docs"
+    )
+    priority: Mapped[int] = mapped_column(Integer, default=10)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    file_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 
     # Relationships
     tickets = relationship("Ticket", back_populates="kb_article")
+    chunks = relationship(
+        "KBChunk", back_populates="article", cascade="all, delete-orphan"
+    )
