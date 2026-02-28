@@ -32,6 +32,40 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
 
+    # Email polling — runs every 60 seconds
+    async def _poll_emails():
+        from agent.pipeline import process_email
+        from app.services.email_service import fetch_new_emails
+
+        emails = await fetch_new_emails()
+        if not emails:
+            return
+        async with async_session_factory() as db:
+            for em in emails:
+                try:
+                    await process_email(
+                        db,
+                        email_from=em.sender,
+                        subject=em.subject,
+                        body=em.body,
+                        message_id=em.message_id,
+                        attachments=em.attachments,
+                    )
+                except Exception:
+                    import logging
+                    logging.getLogger(__name__).exception(
+                        "Pipeline error for message %s", em.message_id
+                    )
+
+    scheduler.add_job(
+        _poll_emails,
+        "interval",
+        seconds=60,
+        id="email_poll",
+        max_instances=1,
+        replace_existing=True,
+    )
+
     scheduler.start()
     app.state.scheduler = scheduler
 
