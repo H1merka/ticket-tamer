@@ -149,6 +149,19 @@ async def process_email(
     await db.commit()
     logger.info("[PIPELINE] ticket_id=%d complete, email_sent=%s", ticket_id, email_sent)
 
+    # Step 7 — fire-and-forget: Telegram & Google Sheets notifications
+    try:
+        from app.services.telegram_service import send_ticket_notification
+        await send_ticket_notification(ticket)
+    except Exception:
+        logger.exception("[PIPELINE] Telegram notification failed for ticket %d", ticket_id)
+
+    try:
+        from app.services.sheets_service import sync_ticket_to_sheet
+        await sync_ticket_to_sheet(ticket)
+    except Exception:
+        logger.exception("[PIPELINE] Google Sheets sync failed for ticket %d", ticket_id)
+
     return PipelineResult(
         classification=classification,
         entities=entities,
