@@ -4,6 +4,14 @@ export interface Ticket {
   email_to: string | null;
   subject: string;
   body: string;
+  // ERIS fields
+  fio: string | null;
+  organization: string | null;
+  phone: string | null;
+  serial_numbers: string[] | null;
+  device_type: string | null;
+  description: string | null;
+  // AI results
   category: string | null;
   priority: string;
   sentiment: string | null;
