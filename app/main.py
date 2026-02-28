@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import settings  # noqa: F401
+from app.config import settings
 from app.routers import tickets, knowledge_base, export
 
 
@@ -11,12 +11,34 @@ from app.routers import tickets, knowledge_base, export
 async def lifespan(app: FastAPI):
     """Startup / shutdown events.
 
-    ML models and background tasks (e.g. email polling) will be
-    initialised here during the hackathon.
+    Initialises APScheduler for KB cleanup and email polling.
     """
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from app.database import async_session_factory
+    from app.services.kb_cleanup_service import cleanup_expired_chunks
+
+    scheduler = AsyncIOScheduler()
+
+    # KB cleanup — runs every KB_CLEANUP_INTERVAL_H hours
+    async def _run_cleanup():
+        async with async_session_factory() as db:
+            await cleanup_expired_chunks(db, dry_run=False)
+
+    scheduler.add_job(
+        _run_cleanup,
+        "interval",
+        hours=settings.kb_cleanup_interval_h,
+        id="kb_cleanup",
+        replace_existing=True,
+    )
+
+    scheduler.start()
+    app.state.scheduler = scheduler
+
     # --- startup ---
     yield
     # --- shutdown ---
+    scheduler.shutdown(wait=False)
 
 
 app = FastAPI(

@@ -84,3 +84,44 @@ async def index_document(
         "chunks_created": chunks_created,
         "source_type": source_type,
     }
+
+
+# ---------------------------------------------------------------------------
+# KB Cleanup endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.delete("/cleanup")
+async def cleanup_kb(
+    dry_run: bool = Query(True),
+    max_age_days: int | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete expired support_history chunks.
+
+    Use dry_run=true (default) to preview how many chunks would be removed.
+    """
+    from app.services.kb_cleanup_service import cleanup_expired_chunks
+
+    deleted = await cleanup_expired_chunks(db, dry_run=dry_run, max_age_days=max_age_days)
+    return {"deleted": deleted, "dry_run": dry_run}
+
+
+@router.patch("/chunks/{chunk_id}/extend")
+async def extend_chunk(
+    chunk_id: int,
+    extend_days: int = Query(90, ge=1),
+    db: AsyncSession = Depends(get_db),
+):
+    """Extend the expires_at of a support_history chunk."""
+    from app.services.kb_cleanup_service import extend_chunk_lifetime
+
+    chunk = await extend_chunk_lifetime(db, chunk_id, extend_days=extend_days)
+    if chunk is None:
+        raise HTTPException(status_code=404, detail="Chunk not found or not support_history")
+    return {
+        "id": chunk.id,
+        "article_id": chunk.article_id,
+        "source_type": chunk.source_type,
+        "expires_at": chunk.expires_at.isoformat() if chunk.expires_at else None,
+    }
