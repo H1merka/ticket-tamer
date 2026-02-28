@@ -1,21 +1,34 @@
-"""Attachment parser — extract text from PDF, DOCX, and image files.
+"""Attachment parser — extract text from PDF, DOCX, image, and audio files.
 
 Supports:
   - PDF (text-based via PyPDF2, scanned via pdf2image + pytesseract)
   - DOCX (paragraphs + tables via python-docx)
   - Images (OCR via Pillow + pytesseract)
+  - Audio (OGG, MP3, WAV via Whisper API — optional)
 """
 
 from __future__ import annotations
 
 import logging
+import tempfile
 from pathlib import Path
+from typing import Any, Protocol, runtime_checkable
+
+from agent.audio_transcriber import is_audio, transcribe_audio
 
 logger = logging.getLogger(__name__)
 
 MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB
 MAX_ATTACHMENTS = 10
 OCR_TIMEOUT = 60  # seconds
+
+
+@runtime_checkable
+class AttachmentLike(Protocol):
+    """Protocol for attachment objects (email_service.Attachment or dict)."""
+    filename: str
+    content_type: str
+    data: bytes
 
 
 async def parse_attachment(filepath: str, content_type: str) -> str:
@@ -51,11 +64,13 @@ async def parse_attachment(filepath: str, content_type: str) -> str:
 
 
 async def parse_attachments(
-    attachments: list[dict],
+    attachments: list[Any],
 ) -> str:
     """Parse multiple attachments and concatenate extracted text.
 
-    Each attachment dict should have keys: path, content_type, filename.
+    Accepts either Attachment dataclass objects (with .filename, .content_type,
+    .data attributes) or dicts with keys: path, content_type, filename.
+
     Returns concatenated text with separators.
     """
     if not attachments:
@@ -63,15 +78,53 @@ async def parse_attachments(
 
     texts: list[str] = []
     for i, att in enumerate(attachments[:MAX_ATTACHMENTS]):
-        filepath = att.get("path", "")
-        content_type = att.get("content_type", "")
-        filename = att.get("filename", f"attachment_{i}")
+        # Support both Attachment objects and dicts
+        if isinstance(att, AttachmentLike):
+            filename = att.filename or f"attachment_{i}"
+            content_type = att.content_type or ""
+            data = att.data
+        elif isinstance(att, dict):
+            filename = att.get("filename", f"attachment_{i}")
+            content_type = att.get("content_type", "")
+            data = att.get("data", b"")
+            # Legacy dict path support
+            if not data and att.get("path"):
+                text = await parse_attachment(att["path"], content_type)
+                if text.strip():
+                    texts.append(f"\n\n--- Текст из вложения: {filename} ---\n\n{text.strip()}")
+                continue
+        else:
+            # Try attribute access
+            filename = getattr(att, "filename", f"attachment_{i}")
+            content_type = getattr(att, "content_type", "")
+            data = getattr(att, "data", b"")
 
-        text = await parse_attachment(filepath, content_type)
-        if text.strip():
-            texts.append(
-                f"\n\n--- Текст из вложения: {filename} ---\n\n{text.strip()}"
-            )
+        if not data:
+            continue
+
+        if len(data) > MAX_FILE_SIZE:
+            logger.warning("Attachment too large (%d bytes): %s", len(data), filename)
+            continue
+
+        # Check for audio first
+        if is_audio(content_type, filename):
+            text = await transcribe_audio(data, filename)
+            if text.strip():
+                texts.append(f"\n\n--- Транскрипция аудио: {filename} ---\n\n{text.strip()}")
+            continue
+
+        # Write to temp file for file-based parsers
+        suffix = Path(filename).suffix or ".bin"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(data)
+            tmp_path = tmp.name
+
+        try:
+            text = await parse_attachment(tmp_path, content_type)
+            if text.strip():
+                texts.append(f"\n\n--- Текст из вложения: {filename} ---\n\n{text.strip()}")
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
 
     return "\n".join(texts)
 
