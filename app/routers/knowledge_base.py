@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+import tempfile
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -39,3 +42,45 @@ async def update_article(
     if article is None:
         raise HTTPException(status_code=404, detail="Article not found")
     return article
+
+
+@router.post("/index")
+async def index_document(
+    file: UploadFile = File(...),
+    source_type: str = Form("official_docs"),
+    category: str = Form("general"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload and index a document into the knowledge base.
+
+    Accepts PDF, DOCX, TXT files. Chunks them, embeds via RouterAI,
+    and stores in kb_chunks with HNSW-indexed vector embeddings.
+    """
+    from agent.indexer import index_document as _index_doc
+
+    # Validate source_type
+    if source_type not in ("official_docs", "support_history"):
+        raise HTTPException(status_code=400, detail="source_type must be 'official_docs' or 'support_history'")
+
+    # Save uploaded file to temp
+    suffix = Path(file.filename or "doc.txt").suffix
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        article_id, chunks_created = await _index_doc(
+            db, tmp_path, source_type=source_type, category=category,
+        )
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    if article_id == 0:
+        raise HTTPException(status_code=400, detail="No text could be extracted from the file")
+
+    return {
+        "article_id": article_id,
+        "chunks_created": chunks_created,
+        "source_type": source_type,
+    }
