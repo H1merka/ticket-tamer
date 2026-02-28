@@ -62,6 +62,7 @@ async def send_ticket_notification(ticket) -> bool:
         await bot.send_message(
             chat_id=settings.telegram_chat_id,
             text=text,
+            parse_mode="HTML",
         )
         logger.info("Sent Telegram notification for ticket #%s", ticket.id)
         return True

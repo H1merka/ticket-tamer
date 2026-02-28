@@ -32,10 +32,14 @@ class IncomingEmail:
     """Parsed representation of an incoming support email."""
     message_id: str
     sender: str
+    sender_name: str
     recipient: str
     subject: str
     body: str
+    html_body: str
     raw_headers: str
+    date: str
+    in_reply_to: str
     uid: str = ""
     attachments: list[Attachment] = field(default_factory=list)
 
@@ -192,13 +196,31 @@ def parse_email_message(raw: bytes) -> IncomingEmail:
     else:
         body = msg.get_content()
 
+    # Extract sender name from "Name <email>" format
+    from_header = msg.get("From", "")
+    sender_name = ""
+    if "<" in from_header:
+        sender_name = from_header.split("<")[0].strip().strip('"')
+
+    # Extract HTML body
+    html_body = ""
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_type() == "text/html":
+                html_body = part.get_content()
+                break
+
     return IncomingEmail(
         message_id=msg.get("Message-ID", ""),
-        sender=msg.get("From", ""),
+        sender=from_header,
+        sender_name=sender_name,
         recipient=msg.get("To", ""),
         subject=msg.get("Subject", ""),
         body=body,
+        html_body=html_body,
         raw_headers=str(msg),
+        date=msg.get("Date", ""),
+        in_reply_to=msg.get("In-Reply-To", ""),
         attachments=attachments,
     )
 

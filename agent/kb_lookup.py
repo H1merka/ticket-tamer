@@ -173,10 +173,10 @@ async def _llm_rerank(query: str, candidates: list[KBMatch]) -> list[KBMatch]:
     user_prompt = f"Запрос: {query}\n\nФрагменты:\n" + "\n\n".join(fragments)
 
     try:
-        scores = await chat_completion_json(
-            system_prompt=_RERANK_SYSTEM,
-            user_prompt=user_prompt,
-        )
+        scores = await chat_completion_json([
+            {"role": "system", "content": _RERANK_SYSTEM},
+            {"role": "user", "content": user_prompt},
+        ])
         # Expect list[{"chunk_id": int, "score": float}]
         if not isinstance(scores, list):
             logger.warning("LLM rerank returned non-list; skipping rerank")
@@ -251,4 +251,3 @@ async def find_best_match(
     """Legacy single-match interface. Returns the highest-scored match or None."""
     matches = await find_best_matches(db, body=body)
     return matches[0] if matches else None
-    )

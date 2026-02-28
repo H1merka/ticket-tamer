@@ -92,7 +92,9 @@ async def process_email(
 
     # Step 5 — create/update ticket
     status = "responded"
-    if classification.confidence < 0.5 or max_score < 0.3:
+    from app.config import settings as app_settings
+    conf_threshold = app_settings.classification_confidence_threshold
+    if classification.confidence < conf_threshold or max_score < 0.3:
         status = "needs_review"
 
     ticket = Ticket(

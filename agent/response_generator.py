@@ -149,10 +149,11 @@ async def generate_response(
     logger.debug("Response prompt:\n%s", user_prompt)
 
     try:
-        raw = await chat_completion(
-            system_prompt=RESPONSE_SYSTEM_PROMPT,
-            user_prompt=user_prompt,
-        )
+        result = await chat_completion([
+            {"role": "system", "content": RESPONSE_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ])
+        raw = result.choices[0].message.content
         response = _postprocess(raw, max_score)
         logger.info(
             "Generated response: %d chars, max_kb_score=%.2f, kb_chunks=%d",
