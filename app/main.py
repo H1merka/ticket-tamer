@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import tickets, knowledge_base, export
+from app.routers import tickets, knowledge_base, export, analytics
 
 
 @asynccontextmanager
@@ -94,6 +94,7 @@ app.add_middleware(
 app.include_router(tickets.router)
 app.include_router(knowledge_base.router)
 app.include_router(export.router)
+app.include_router(analytics.router)
 
 
 @app.get("/health")

@@ -3,6 +3,7 @@ import type { Ticket } from "./types/ticket";
 import { fetchTickets } from "./api/client";
 import { TicketTable } from "./components/TicketTable";
 import { ExportButtons } from "./components/ExportButtons";
+import { Dashboard } from "./components/Dashboard";
 
 const CATEGORIES = [
   "неисправность",
@@ -12,13 +13,17 @@ const CATEGORIES = [
   "прочее",
 ];
 
+type Page = "tickets" | "dashboard";
+
 export default function App() {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
+  const [page, setPage] = useState<Page>("tickets");
 
   useEffect(() => {
+    if (page !== "tickets") return;
     setLoading(true);
     fetchTickets({
       status: statusFilter || undefined,
@@ -28,45 +33,89 @@ export default function App() {
       .then((data) => setTickets(data))
       .catch((err) => console.error("Failed to fetch tickets:", err))
       .finally(() => setLoading(false));
-  }, [statusFilter, categoryFilter]);
+  }, [statusFilter, categoryFilter, page]);
 
   return (
     <div style={{ maxWidth: 1400, margin: "0 auto", padding: 24 }}>
-      <h1 style={{ fontSize: 24, marginBottom: 16 }}>Ticket Tamer — ЭРИС</h1>
-
-      {/* Filters */}
-      <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          style={selectStyle}
-        >
-          <option value="">Все статусы</option>
-          <option value="new">Новый</option>
-          <option value="processing">В обработке</option>
-          <option value="responded">Отвечен</option>
-          <option value="needs_review">Требует проверки</option>
-          <option value="closed">Закрыт</option>
-        </select>
-
-        <select
-          value={categoryFilter}
-          onChange={(e) => setCategoryFilter(e.target.value)}
-          style={selectStyle}
-        >
-          <option value="">Все категории</option>
-          {CATEGORIES.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </select>
-
-        <ExportButtons status={statusFilter} category={categoryFilter} />
+      <div style={{ display: "flex", alignItems: "center", gap: 24, marginBottom: 16 }}>
+        <h1 style={{ fontSize: 24, margin: 0 }}>Ticket Tamer — ЭРИС</h1>
+        <nav style={{ display: "flex", gap: 8 }}>
+          <NavButton active={page === "tickets"} onClick={() => setPage("tickets")}>
+            Тикеты
+          </NavButton>
+          <NavButton active={page === "dashboard"} onClick={() => setPage("dashboard")}>
+            Аналитика
+          </NavButton>
+        </nav>
       </div>
 
-      <TicketTable tickets={tickets} loading={loading} />
+      {page === "dashboard" ? (
+        <Dashboard />
+      ) : (
+        <>
+          {/* Filters */}
+          <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              style={selectStyle}
+            >
+              <option value="">Все статусы</option>
+              <option value="new">Новый</option>
+              <option value="processing">В обработке</option>
+              <option value="responded">Отвечен</option>
+              <option value="needs_review">Требует проверки</option>
+              <option value="closed">Закрыт</option>
+            </select>
+
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              style={selectStyle}
+            >
+              <option value="">Все категории</option>
+              {CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+
+            <ExportButtons status={statusFilter} category={categoryFilter} />
+          </div>
+
+          <TicketTable tickets={tickets} loading={loading} />
+        </>
+      )}
     </div>
+  );
+}
+
+function NavButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: "6px 16px",
+        border: "1px solid #ccc",
+        borderRadius: 4,
+        background: active ? "#3498db" : "#fff",
+        color: active ? "#fff" : "#333",
+        cursor: "pointer",
+        fontSize: 14,
+        fontWeight: active ? 600 : 400,
+      }}
+    >
+      {children}
+    </button>
   );
 }
 
