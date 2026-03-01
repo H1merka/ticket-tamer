@@ -2,6 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.dependencies import get_current_user
+from app.models.user import User
 from app.schemas.ticket import TicketCreate, TicketRead, TicketUpdate
 from app.services import ticket_service
 
@@ -15,6 +17,7 @@ async def list_tickets(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(get_current_user),
 ):
     return await ticket_service.get_tickets(
         db, status=status, category=category, skip=skip, limit=limit
@@ -22,7 +25,7 @@ async def list_tickets(
 
 
 @router.get("/{ticket_id}", response_model=TicketRead)
-async def get_ticket(ticket_id: int, db: AsyncSession = Depends(get_db)):
+async def get_ticket(ticket_id: int, db: AsyncSession = Depends(get_db), _current_user: User = Depends(get_current_user)):
     ticket = await ticket_service.get_ticket_by_id(db, ticket_id)
     if ticket is None:
         raise HTTPException(status_code=404, detail="Ticket not found")
@@ -30,13 +33,13 @@ async def get_ticket(ticket_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/", response_model=TicketRead, status_code=201)
-async def create_ticket(data: TicketCreate, db: AsyncSession = Depends(get_db)):
+async def create_ticket(data: TicketCreate, db: AsyncSession = Depends(get_db), _current_user: User = Depends(get_current_user)):
     return await ticket_service.create_ticket(db, data)
 
 
 @router.patch("/{ticket_id}", response_model=TicketRead)
 async def update_ticket(
-    ticket_id: int, data: TicketUpdate, db: AsyncSession = Depends(get_db)
+    ticket_id: int, data: TicketUpdate, db: AsyncSession = Depends(get_db), _current_user: User = Depends(get_current_user),
 ):
     ticket = await ticket_service.update_ticket(db, ticket_id, data)
     if ticket is None:

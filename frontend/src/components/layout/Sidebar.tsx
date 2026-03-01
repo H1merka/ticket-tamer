@@ -1,6 +1,5 @@
 import { NavLink } from "react-router-dom";
 import {
-  Home,
   MessageSquare,
   BarChart3,
 } from "lucide-react";

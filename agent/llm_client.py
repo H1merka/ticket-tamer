@@ -44,12 +44,14 @@ async def chat_completion(
     """Send a chat completion request with retry + fallback logic."""
     client = get_client()
     model = model or settings.llm_model
+    temperature = kwargs.pop("temperature", settings.llm_temperature)
+    max_tokens = kwargs.pop("max_tokens", settings.llm_max_tokens)
     try:
         return await client.chat.completions.create(
             model=model,
             messages=messages,
-            temperature=kwargs.pop("temperature", settings.llm_temperature),
-            max_tokens=kwargs.pop("max_tokens", settings.llm_max_tokens),
+            temperature=temperature,
+            max_tokens=max_tokens,
             **kwargs,
         )
     except Exception as exc:
@@ -61,8 +63,8 @@ async def chat_completion(
             return await client.chat.completions.create(
                 model=settings.llm_fallback_model,
                 messages=messages,
-                temperature=kwargs.pop("temperature", settings.llm_temperature),
-                max_tokens=kwargs.pop("max_tokens", settings.llm_max_tokens),
+                temperature=temperature,
+                max_tokens=max_tokens,
                 **kwargs,
             )
         raise

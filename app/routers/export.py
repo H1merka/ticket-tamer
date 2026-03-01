@@ -2,14 +2,58 @@ import csv
 import io
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models.user import User
 from app.services import ticket_service
+from app.services.auth_service import decode_access_token, get_user_by_username
 
 router = APIRouter(prefix="/api/v1/export", tags=["export"])
+
+_bearer_scheme = HTTPBearer(auto_error=False)
+
+
+async def _get_export_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(
+        _bearer_scheme,
+    ),
+    token: str | None = Query(
+        None, description="JWT token for download links",
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Accept auth via header OR query-param for downloads."""
+    raw_token = (
+        credentials.credentials if credentials else token
+    )
+    if not raw_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Требуется авторизация",
+        )
+    payload = decode_access_token(raw_token)
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Невалидный токен",
+        )
+    username: str | None = payload.get("sub")
+    if not username:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Невалидный токен",
+        )
+    user = await get_user_by_username(db, username)
+    if user is None or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Пользователь не найден",
+        )
+    return user
 
 TICKET_COLUMNS = [
     "id", "created_at", "fio", "organization", "phone", "email_from",
@@ -24,6 +68,7 @@ async def export_csv(
     status: str | None = Query(None),
     category: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(_get_export_user),
 ):
     """Export tickets as CSV with optional filters."""
     tickets = await ticket_service.get_tickets(
@@ -56,6 +101,7 @@ async def export_xlsx(
     status: str | None = Query(None),
     category: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(_get_export_user),
 ):
     """Export tickets as XLSX with optional filters."""
     from openpyxl import Workbook

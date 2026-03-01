@@ -5,6 +5,8 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.dependencies import get_current_user
+from app.models.user import User
 from app.schemas.knowledge_base import KBArticleCreate, KBArticleRead, KBArticleUpdate
 from app.services import kb_service
 
@@ -17,12 +19,13 @@ async def list_articles(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(get_current_user),
 ):
     return await kb_service.get_articles(db, category=category, skip=skip, limit=limit)
 
 
 @router.get("/{article_id}", response_model=KBArticleRead)
-async def get_article(article_id: int, db: AsyncSession = Depends(get_db)):
+async def get_article(article_id: int, db: AsyncSession = Depends(get_db), _current_user: User = Depends(get_current_user)):
     article = await kb_service.get_article_by_id(db, article_id)
     if article is None:
         raise HTTPException(status_code=404, detail="Article not found")
@@ -30,13 +33,13 @@ async def get_article(article_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/", response_model=KBArticleRead, status_code=201)
-async def create_article(data: KBArticleCreate, db: AsyncSession = Depends(get_db)):
+async def create_article(data: KBArticleCreate, db: AsyncSession = Depends(get_db), _current_user: User = Depends(get_current_user)):
     return await kb_service.create_article(db, data)
 
 
 @router.patch("/{article_id}", response_model=KBArticleRead)
 async def update_article(
-    article_id: int, data: KBArticleUpdate, db: AsyncSession = Depends(get_db)
+    article_id: int, data: KBArticleUpdate, db: AsyncSession = Depends(get_db), _current_user: User = Depends(get_current_user),
 ):
     article = await kb_service.update_article(db, article_id, data)
     if article is None:
@@ -50,6 +53,7 @@ async def index_document(
     source_type: str = Form("official_docs"),
     category: str = Form("general"),
     db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(get_current_user),
 ):
     """Upload and index a document into the knowledge base.
 
@@ -96,6 +100,7 @@ async def cleanup_kb(
     dry_run: bool = Query(True),
     max_age_days: int | None = Query(None),
     db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(get_current_user),
 ):
     """Delete expired support_history chunks.
 
@@ -112,6 +117,7 @@ async def extend_chunk(
     chunk_id: int,
     extend_days: int = Query(90, ge=1),
     db: AsyncSession = Depends(get_db),
+    _current_user: User = Depends(get_current_user),
 ):
     """Extend the expires_at of a support_history chunk."""
     from app.services.kb_cleanup_service import extend_chunk_lifetime

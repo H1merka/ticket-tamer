@@ -31,16 +31,5 @@ services:
       db:
         condition: service_healthy
 
-  frontend:
-    image: node:20-alpine
-    working_dir: /app
-    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./frontend:/app
-    environment:
-      VITE_API_URL: http://backend:8000
-
 volumes:
   pgdata:

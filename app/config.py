@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     app_port: int = 8000
     debug: bool = False
 
+    # Auth / JWT
+    jwt_secret_key: str = "change-me-in-production-use-openssl-rand-hex-32"
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_minutes: int = 480  # 8 hours
+
     # Classification
     classification_confidence_threshold: float = 0.7
 

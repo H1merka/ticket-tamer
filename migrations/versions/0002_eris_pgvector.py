@@ -1,7 +1,7 @@
-"""add eris fields and kb_chunks with pgvector
+"""add pgvector extension and kb_chunks table
 
 Revision ID: 0002_eris_pgvector
-Revises:
+Revises: 0001_initial_tables
 Create Date: 2026-02-28
 """
 
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 
 revision = "0002_eris_pgvector"
-down_revision = None
+down_revision = "0001_initial_tables"
 branch_labels = None
 depends_on = None
 
@@ -18,36 +18,6 @@ depends_on = None
 def upgrade() -> None:
     # Enable pgvector extension
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
-
-    # --- Add ERIS fields to tickets ---
-    op.add_column("tickets", sa.Column("fio", sa.String(255), nullable=True))
-    op.add_column("tickets", sa.Column("organization", sa.String(500), nullable=True))
-    op.add_column("tickets", sa.Column("phone", sa.String(50), nullable=True))
-    op.add_column("tickets", sa.Column("serial_numbers", JSONB, nullable=True))
-    op.add_column("tickets", sa.Column("device_type", sa.String(255), nullable=True))
-    op.add_column("tickets", sa.Column("description", sa.Text(), nullable=True))
-
-    # --- Add source/priority fields to knowledge_base ---
-    op.add_column(
-        "knowledge_base",
-        sa.Column("source_type", sa.String(20), nullable=False, server_default="official_docs"),
-    )
-    op.add_column(
-        "knowledge_base",
-        sa.Column("priority", sa.Integer(), nullable=False, server_default="10"),
-    )
-    op.add_column(
-        "knowledge_base",
-        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
-    )
-    op.add_column(
-        "knowledge_base",
-        sa.Column("file_path", sa.String(500), nullable=True),
-    )
-    op.add_column(
-        "knowledge_base",
-        sa.Column("url", sa.String(500), nullable=True),
-    )
 
     # --- Create kb_chunks table ---
     op.create_table(
@@ -105,15 +75,4 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("kb_chunks")
-    op.drop_column("knowledge_base", "url")
-    op.drop_column("knowledge_base", "file_path")
-    op.drop_column("knowledge_base", "expires_at")
-    op.drop_column("knowledge_base", "priority")
-    op.drop_column("knowledge_base", "source_type")
-    op.drop_column("tickets", "description")
-    op.drop_column("tickets", "device_type")
-    op.drop_column("tickets", "serial_numbers")
-    op.drop_column("tickets", "phone")
-    op.drop_column("tickets", "organization")
-    op.drop_column("tickets", "fio")
     op.execute("DROP EXTENSION IF EXISTS vector")

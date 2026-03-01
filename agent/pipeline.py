@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,6 +42,7 @@ async def process_email(
     body: str,
     message_id: str = "",
     attachments: list[Attachment] | None = None,
+    email_to: str = "",
 ) -> PipelineResult:
     """Run the full agent pipeline on a single email.
 
@@ -99,6 +101,7 @@ async def process_email(
 
     ticket = Ticket(
         email_from=email_from,
+        email_to=email_to or None,
         subject=subject,
         body=full_body,
         category=classification.category,
@@ -107,6 +110,10 @@ async def process_email(
         priority=classification.priority,
         response=response_text,
         status=status,
+        is_auto=(status == "responded"),
+        responded_at=datetime.now(timezone.utc) if status == "responded" else None,
+        kb_article_id=kb_matches[0].article_id if kb_matches else None,
+        entities=entities,
         fio=entities.get("fio"),
         organization=entities.get("organization"),
         phone=entities.get("phone"),

@@ -117,19 +117,15 @@ async def generate_response(
     kb_matches: list[KBMatch] | None = None,
     body: str = "",
     sentiment: str = "нейтраль",
-    # Legacy compat: accept single kb_match kwarg
-    kb_match: KBMatch | None = None,
 ) -> str:
     """Generate a response email body using LLM + KB context.
 
     Parameters
     ----------
     kb_matches : list of top-3 KBMatch from RAG pipeline
-    kb_match : deprecated single match (backward compat)
     """
-    # Handle legacy single match
     if kb_matches is None:
-        kb_matches = [kb_match] if kb_match else []
+        kb_matches = []
 
     max_score = max((m.score for m in kb_matches), default=0.0)
 

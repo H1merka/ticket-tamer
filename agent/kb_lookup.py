@@ -127,11 +127,14 @@ def _merge_and_boost(
     # Sort descending by boosted score
     combined.sort(key=lambda m: m.score, reverse=True)
 
-    # Deduplicate by article_id — keep highest score per article
+    # Deduplicate by article_id — keep highest score per article.
+    # Chunks without an article_id (standalone) are kept individually.
     seen_articles: set[int] = set()
     deduped: list[KBMatch] = []
     for m in combined:
-        if m.article_id not in seen_articles:
+        if m.article_id is None:
+            deduped.append(m)
+        elif m.article_id not in seen_articles:
             seen_articles.add(m.article_id)
             deduped.append(m)
 
@@ -240,14 +243,3 @@ async def find_best_matches(
     # LLM reranking → top 3
     top3 = await _llm_rerank(query, candidates)
     return top3
-
-
-# Backward-compat alias used by pipeline.py
-async def find_best_match(
-    db: AsyncSession,
-    category: str,
-    body: str,
-) -> KBMatch | None:
-    """Legacy single-match interface. Returns the highest-scored match or None."""
-    matches = await find_best_matches(db, body=body)
-    return matches[0] if matches else None

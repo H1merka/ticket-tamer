@@ -1,10 +1,13 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
-from app.routers import tickets, knowledge_base, export, analytics
+from app.routers import tickets, knowledge_base, export, analytics, auth
 
 
 @asynccontextmanager
@@ -50,6 +53,7 @@ async def lifespan(app: FastAPI):
                         body=em.body,
                         message_id=em.message_id,
                         attachments=em.attachments,
+                        email_to=em.recipient,
                     )
                 except Exception:
                     import logging
@@ -111,6 +115,7 @@ app.add_middleware(
 )
 
 # Routers
+app.include_router(auth.router)
 app.include_router(tickets.router)
 app.include_router(knowledge_base.router)
 app.include_router(export.router)
@@ -120,3 +125,17 @@ app.include_router(analytics.router)
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
+
+
+# Serve built frontend SPA from /app/static (Docker image)
+_STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+if _STATIC_DIR.is_dir():
+    app.mount("/assets", StaticFiles(directory=_STATIC_DIR / "assets"), name="static-assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        """Serve SPA index.html for all non-API routes."""
+        file = _STATIC_DIR / full_path
+        if file.is_file():
+            return FileResponse(file)
+        return FileResponse(_STATIC_DIR / "index.html")
