@@ -1,4 +1,9 @@
-"""Crawler for eriskip.com — downloads product PDF manuals and indexes them.
+"""Crawler for eriskip.com — parses product cards, downloads documents,
+and indexes everything into the knowledge base.
+
+Delegates URL discovery (with pagination) and HTML parsing to
+:mod:`agent.product_parser`, which correctly handles the eriskip.com
+catalog structure (/ru/product/<slug> URLs, multi-page listings).
 
 Usage:
     Standalone:  python -m agent.crawler
@@ -10,10 +15,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlparse
 
 import httpx
-from bs4 import BeautifulSoup
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,76 +26,100 @@ from app.models.knowledge_base import KnowledgeBaseArticle
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://eriskip.com"
-PRODUCTS_URL = f"{BASE_URL}/ru/products"
 DOCS_DIR = Path("docs/eriskip")
 
-
-async def _fetch_page(client: httpx.AsyncClient, url: str) -> str | None:
-    """GET a page and return HTML text, or None on error."""
-    try:
-        resp = await client.get(url, follow_redirects=True, timeout=30)
-        resp.raise_for_status()
-        return resp.text
-    except httpx.HTTPError as exc:
-        logger.warning("Failed to fetch %s: %s", url, exc)
-        return None
+# File extensions the indexer can process (load_document supports these)
+_INDEXABLE_EXTS = {".pdf", ".doc", ".docx", ".html", ".htm", ".txt"}
 
 
-async def _download_file(client: httpx.AsyncClient, url: str, dest: Path) -> bool:
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+async def _download_file(
+    client: httpx.AsyncClient,
+    url: str,
+    dest: Path,
+    *,
+    retries: int = 3,
+) -> bool:
     """Download a file to *dest*. Returns True on success."""
-    try:
-        async with client.stream("GET", url, follow_redirects=True, timeout=60) as resp:
-            resp.raise_for_status()
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            with open(dest, "wb") as f:
-                async for chunk in resp.aiter_bytes(8192):
-                    f.write(chunk)
-        return True
-    except httpx.HTTPError as exc:
-        logger.warning("Failed to download %s: %s", url, exc)
-        return False
-
-
-def _extract_product_links(html: str) -> list[str]:
-    """Extract individual product page URLs from the products catalog."""
-    soup = BeautifulSoup(html, "html.parser")
-    links: list[str] = []
-    for a in soup.find_all("a", href=True):
-        href: str = a["href"]
-        # Product pages typically live under /ru/products/ or /ru/catalog/
-        if "/ru/products/" in href or "/ru/catalog/" in href:
-            full = urljoin(BASE_URL, href)
-            if full not in links:
-                links.append(full)
-    return links
-
-
-def _extract_pdf_links(html: str, page_url: str) -> list[str]:
-    """Find PDF download links on a product page."""
-    soup = BeautifulSoup(html, "html.parser")
-    pdfs: list[str] = []
-    for a in soup.find_all("a", href=True):
-        href: str = a["href"]
-        if href.lower().endswith(".pdf"):
-            pdfs.append(urljoin(page_url, href))
-    return pdfs
+    for attempt in range(1, retries + 1):
+        try:
+            async with client.stream(
+                "GET", url, follow_redirects=True, timeout=60,
+            ) as resp:
+                resp.raise_for_status()
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                with open(dest, "wb") as f:
+                    async for chunk in resp.aiter_bytes(8192):
+                        f.write(chunk)
+            return True
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "Download %s attempt %d/%d failed: %s",
+                url, attempt, retries, exc,
+            )
+            if attempt < retries:
+                await asyncio.sleep(2 * attempt)
+    return False
 
 
 async def _already_indexed(db: AsyncSession, url: str) -> bool:
     """Check if a document with this URL is already in the KB."""
     result = await db.execute(
-        select(KnowledgeBaseArticle.id).where(KnowledgeBaseArticle.url == url).limit(1)
+        select(KnowledgeBaseArticle.id)
+        .where(KnowledgeBaseArticle.url == url)
+        .limit(1)
     )
     return result.scalar_one_or_none() is not None
 
 
-async def crawl_eriskip() -> list[str]:
-    """Crawl eriskip.com product catalog and download + index PDF manuals.
+def _product_card_to_text(product: dict) -> str:
+    """Convert a parsed product card dict to indexable plain text."""
+    parts: list[str] = []
 
-    Returns list of indexed file paths.
+    name = product.get("name", "").strip()
+    if name:
+        parts.append(f"Продукт: {name}")
+
+    desc = product.get("description", "").strip()
+    if desc:
+        parts.append(f"Описание: {desc}")
+
+    specs = product.get("specifications", {})
+    if specs:
+        specs_lines = [f"  {k}: {v}" for k, v in specs.items()]
+        parts.append("Характеристики:\n" + "\n".join(specs_lines))
+
+    files = product.get("files", [])
+    if files:
+        file_lines = [f"  [{f['type']}] {f['name']}" for f in files]
+        parts.append("Документы:\n" + "\n".join(file_lines))
+
+    return "\n\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Main crawl pipeline
+# ---------------------------------------------------------------------------
+
+async def crawl_eriskip() -> list[str]:
+    """Crawl eriskip.com product catalog and index into KB.
+
+    Pipeline:
+      1. Discover all product URLs via product_parser (handles pagination
+         and the correct /ru/product/<slug> URL pattern).
+      2. Parse each product page: name, description, specs, file links.
+      3. Index product card text as ``official_docs`` (priority=10).
+      4. Download & index supported document files (PDF, DOCX, etc.)
+         as ``official_docs`` (priority=10), with the file type from
+         product_parser's ``classify_file`` used as the KB category.
+
+    Returns list of indexed items (``card:<url>`` keys + file paths).
     """
-    from agent.indexer import index_document
+    from agent.indexer import index_document, index_text
+    from agent.product_parser import crawl_product_cards
 
     indexed: list[str] = []
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
@@ -99,61 +127,109 @@ async def crawl_eriskip() -> list[str]:
     async with httpx.AsyncClient(
         headers={"User-Agent": "TicketTamer/1.0 (hackathon bot)"},
     ) as client:
-        # Step 1: get product catalog
-        catalog_html = await _fetch_page(client, PRODUCTS_URL)
-        if not catalog_html:
-            logger.error("Cannot fetch product catalog at %s", PRODUCTS_URL)
+
+        # ------------------------------------------------------------------
+        # Step 1-2: discover product URLs (with pagination) and parse cards
+        # ------------------------------------------------------------------
+        logger.info("Starting eriskip.com product catalog crawl …")
+        try:
+            products = await crawl_product_cards(client, delay=1.0)
+        except Exception:
+            logger.exception("Failed to crawl product cards")
             return indexed
 
-        product_links = _extract_product_links(catalog_html)
-        logger.info("Found %d product links on catalog page", len(product_links))
+        logger.info("Parsed %d product cards from catalog", len(products))
 
-        # Step 2: visit each product page, find PDFs
-        pdf_urls: list[str] = []
-        for link in product_links:
-            page_html = await _fetch_page(client, link)
-            if not page_html:
-                continue
-            for pdf_url in _extract_pdf_links(page_html, link):
-                if pdf_url not in pdf_urls:
-                    pdf_urls.append(pdf_url)
-
-        logger.info("Found %d unique PDF links across products", len(pdf_urls))
-
-        # Step 3: download & index each PDF
+        # ------------------------------------------------------------------
+        # Step 3-4: index text + documents into KB
+        # ------------------------------------------------------------------
         async with async_session_factory() as db:
-            for pdf_url in pdf_urls:
-                # Deduplication: skip already-indexed docs
-                if await _already_indexed(db, pdf_url):
-                    logger.debug("Already indexed: %s", pdf_url)
-                    continue
+            for product in products:
+                product_url = product.get("url", "")
+                product_name = product.get("name", "unknown")
 
-                filename = Path(urlparse(pdf_url).path).name or "manual.pdf"
-                dest = DOCS_DIR / filename
+                # --- 3. Index product card text --------------------------
+                card_key = f"card:{product_url}"
+                if not await _already_indexed(db, card_key):
+                    card_text = _product_card_to_text(product)
+                    if card_text and len(card_text) >= 20:
+                        try:
+                            article_id, n_chunks = await index_text(
+                                db,
+                                card_text,
+                                source_type="official_docs",
+                                category="product_info",
+                                priority=10,
+                                title=product_name,
+                            )
+                            if article_id:
+                                article = await db.get(
+                                    KnowledgeBaseArticle, article_id,
+                                )
+                                if article:
+                                    article.url = card_key
+                                indexed.append(card_key)
+                                logger.info(
+                                    "Indexed card '%s' → article=%d, %d chunks",
+                                    product_name, article_id, n_chunks,
+                                )
+                        except Exception:
+                            logger.exception(
+                                "Error indexing card for %s", product_name,
+                            )
+                else:
+                    logger.debug("Card already indexed: %s", product_name)
 
-                if not await _download_file(client, pdf_url, dest):
-                    continue
+                # --- 4. Download & index document files ------------------
+                for file_info in product.get("files", []):
+                    file_url = file_info.get("url", "")
+                    if not file_url:
+                        continue
 
-                try:
-                    article_id, chunks = await index_document(
-                        db,
-                        str(dest),
-                        source_type="official_docs",
-                        category="general",
-                        url=pdf_url,
-                    )
-                    if article_id:
-                        indexed.append(str(dest))
-                        logger.info(
-                            "Indexed %s → article_id=%d, %d chunks",
-                            filename, article_id, chunks,
+                    # Only process formats the indexer can handle
+                    ext = Path(urlparse(file_url).path).suffix.lower()
+                    if ext not in _INDEXABLE_EXTS:
+                        logger.debug(
+                            "Skipping non-indexable file (%s): %s", ext, file_url,
                         )
-                except Exception:
-                    logger.exception("Error indexing %s", dest)
+                        continue
+
+                    if await _already_indexed(db, file_url):
+                        logger.debug("Already indexed file: %s", file_url)
+                        continue
+
+                    filename = (
+                        Path(urlparse(file_url).path).name
+                        or f"document{ext}"
+                    )
+                    dest = DOCS_DIR / filename
+
+                    if not await _download_file(client, file_url, dest):
+                        continue
+
+                    try:
+                        article_id, n_chunks = await index_document(
+                            db,
+                            str(dest),
+                            source_type="official_docs",
+                            category=file_info.get("type", "general"),
+                            url=file_url,
+                        )
+                        if article_id:
+                            indexed.append(str(dest))
+                            logger.info(
+                                "Indexed file '%s' [%s] → article=%d, %d chunks",
+                                filename,
+                                file_info.get("type", "?"),
+                                article_id,
+                                n_chunks,
+                            )
+                    except Exception:
+                        logger.exception("Error indexing file %s", dest)
 
             await db.commit()
 
-    logger.info("Crawled eriskip.com: indexed %d documents", len(indexed))
+    logger.info("Crawled eriskip.com: indexed %d items total", len(indexed))
     return indexed
 
 
@@ -162,6 +238,9 @@ async def crawl_eriskip() -> list[str]:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(name)s | %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s | %(name)s | %(message)s",
+    )
     result = asyncio.run(crawl_eriskip())
-    print(f"Indexed {len(result)} documents: {result}")
+    print(f"Indexed {len(result)} items: {result}")

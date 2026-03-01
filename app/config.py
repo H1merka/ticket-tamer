@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     kb_retention_days: int = 180
     kb_cleanup_interval_h: int = 24
 
+    # Crawler
+    crawler_interval_h: int = 168  # weekly
+
     # Telegram
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""

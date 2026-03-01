@@ -212,3 +212,8 @@ __marimo__/
 # Docs
 extra/
 specification.txt
+
+# Node / Frontend
+node_modules/
+frontend/dist/
+frontend/package-lock.json

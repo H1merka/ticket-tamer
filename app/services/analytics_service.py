@@ -47,9 +47,13 @@ async def get_summary(db: AsyncSession) -> AnalyticsSummary:
     except Exception:
         pass
 
-    # Auto-response rate: responded / total
-    responded = by_status.get("responded", 0)
-    auto_rate = round(responded / total, 2) if total > 0 else 0.0
+    # Auto-response rate: is_auto=True / total
+    auto_q = select(func.count(Ticket.id)).where(
+        Ticket.is_auto.is_(True),
+        Ticket.status == "responded",
+    )
+    auto_count = (await db.execute(auto_q)).scalar() or 0
+    auto_rate = round(auto_count / total, 2) if total > 0 else 0.0
 
     # Top devices
     dev_q = (
@@ -81,8 +85,8 @@ async def get_timeline(db: AsyncSession, days: int = 30) -> list[TimelinePoint]:
         select(
             cast(Ticket.created_at, Date).label("day"),
             func.count(Ticket.id).label("total"),
-            func.sum(case((Ticket.status == "responded", 1), else_=0)).label("auto"),
-            func.sum(case((Ticket.status != "responded", 1), else_=0)).label("manual"),
+            func.sum(case((Ticket.is_auto.is_(True), 1), else_=0)).label("auto"),
+            func.sum(case((Ticket.is_auto.is_(False), 1), else_=0)).label("manual"),
         )
         .where(Ticket.created_at >= cutoff)
         .group_by(cast(Ticket.created_at, Date))

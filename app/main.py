@@ -66,6 +66,26 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
 
+    # Crawler — crawl eriskip.com periodically
+    async def _run_crawler():
+        from agent.crawler import crawl_eriskip
+        try:
+            await crawl_eriskip()
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                "Crawler job failed"
+            )
+
+    scheduler.add_job(
+        _run_crawler,
+        "interval",
+        hours=settings.crawler_interval_h,
+        id="eriskip_crawler",
+        max_instances=1,
+        replace_existing=True,
+    )
+
     scheduler.start()
     app.state.scheduler = scheduler
 

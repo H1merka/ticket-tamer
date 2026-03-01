@@ -151,7 +151,37 @@ async def process_email(
     await db.commit()
     logger.info("[PIPELINE] ticket_id=%d complete, email_sent=%s", ticket_id, email_sent)
 
-    # Step 7 — fire-and-forget: Telegram & Google Sheets notifications
+    # Step 7 — index ticket Q+A into KB as support_history
+    if status == "responded":
+        try:
+            from agent.indexer import index_text
+            qa_text = (
+                f"Тема: {subject}\n"
+                f"Категория: {classification.category}\n"
+                f"Прибор: {entities.get('device_type', '')}\n\n"
+                f"Обращение:\n{full_body[:2000]}\n\n"
+                f"Ответ:\n{response_text[:2000]}"
+            )
+            await index_text(
+                db,
+                text=qa_text,
+                source_type="support_history",
+                category=classification.category or "прочее",
+                priority=1,
+                title=f"ticket_{ticket_id}",
+            )
+            await db.commit()
+            logger.info(
+                "[PIPELINE] Indexed ticket %d into KB as support_history",
+                ticket_id,
+            )
+        except Exception:
+            logger.exception(
+                "[PIPELINE] Failed to index ticket %d into KB",
+                ticket_id,
+            )
+
+    # Step 8 — fire-and-forget: Telegram & Google Sheets notifications
     try:
         from app.services.telegram_service import send_ticket_notification
         await send_ticket_notification(ticket)
