@@ -28,14 +28,11 @@ COPY alembic.ini .
 # Frontend static files (built in previous stage)
 COPY --from=frontend-build /app/frontend/dist /app/static
 
-# Entrypoint script: run migrations then start server
-COPY <<'EOF' /app/entrypoint.sh
-#!/bin/sh
-set -e
-alembic upgrade head
-exec uvicorn app.main:app --host 0.0.0.0 --port 8000
-EOF
-RUN chmod +x /app/entrypoint.sh
+ENV PYTHONPATH=/app
+
+# Entrypoint: run migrations then start server
+RUN printf '#!/bin/sh\nset -e\nalembic upgrade head\nexec uvicorn app.main:app --host 0.0.0.0 --port 8000\n' > /app/entrypoint.sh \
+    && chmod +x /app/entrypoint.sh
 
 EXPOSE 8000
 

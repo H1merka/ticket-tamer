@@ -120,6 +120,8 @@ async def export_xlsx(
             val = getattr(t, col)
             if isinstance(val, list):
                 val = ", ".join(str(v) for v in val)
+            elif isinstance(val, datetime):
+                val = val.replace(tzinfo=None)
             row.append(val)
         ws.append(row)
 
