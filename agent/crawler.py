@@ -31,6 +31,9 @@ DOCS_DIR = Path("docs/eriskip")
 # File extensions the indexer can process (load_document supports these)
 _INDEXABLE_EXTS = {".pdf", ".doc", ".docx", ".html", ".htm", ".txt"}
 
+# Skip files larger than this (bytes) — large scanned PDFs cause OCR to hang
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -144,7 +147,7 @@ async def crawl_eriskip() -> list[str]:
         # Step 3-4: index text + documents into KB
         # ------------------------------------------------------------------
         async with async_session_factory() as db:
-            for product in products:
+            for i, product in enumerate(products, 1):
                 product_url = product.get("url", "")
                 product_name = product.get("name", "unknown")
 
@@ -207,6 +210,19 @@ async def crawl_eriskip() -> list[str]:
                     if not await _download_file(client, file_url, dest):
                         continue
 
+                    # Skip files that are too large (OCR on big scanned
+                    # PDFs can hang for hours on a CPU-only container)
+                    file_size = dest.stat().st_size
+                    if file_size > MAX_FILE_SIZE:
+                        logger.warning(
+                            "Skipping oversized file '%s' (%.1f MB > %.1f MB limit)",
+                            filename,
+                            file_size / 1024 / 1024,
+                            MAX_FILE_SIZE / 1024 / 1024,
+                        )
+                        dest.unlink(missing_ok=True)
+                        continue
+
                     try:
                         article_id, n_chunks = await index_document(
                             db,
@@ -227,7 +243,13 @@ async def crawl_eriskip() -> list[str]:
                     except Exception:
                         logger.exception("Error indexing file %s", dest)
 
-            await db.commit()
+                # Commit after each product so progress is saved
+                # even if the process is interrupted later
+                await db.commit()
+                logger.info(
+                    "Committed product %d/%d: %s",
+                    i, len(products), product_name,
+                )
 
     logger.info("Crawled eriskip.com: indexed %d items total", len(indexed))
     return indexed

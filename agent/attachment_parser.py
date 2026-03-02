@@ -150,17 +150,50 @@ def _parse_pdf(filepath: str) -> str:
     return full_text
 
 
-def _ocr_pdf(filepath: str) -> str:
-    """OCR a scanned PDF using pdf2image + pytesseract."""
+def _ocr_pdf(filepath: str, max_pages: int = 10) -> str:
+    """OCR a scanned PDF using pdf2image + pytesseract.
+
+    Limits conversion to *max_pages* to avoid OOM / excessive runtime
+    on large scanned catalogs.  Each page is OCR-ed with a per-page
+    timeout of ``OCR_TIMEOUT`` seconds.
+    """
+    import signal
+    import threading
+
     try:
         from pdf2image import convert_from_path
         import pytesseract
 
-        images = convert_from_path(filepath)
+        images = convert_from_path(filepath, last_page=max_pages)
         texts: list[str] = []
-        for img in images:
-            text = pytesseract.image_to_string(img, lang="rus+eng")
-            texts.append(text)
+        for i, img in enumerate(images, 1):
+            # Run pytesseract with a timeout per page
+            result: list[str] = []
+            exc_holder: list[Exception] = []
+
+            def _do_ocr():
+                try:
+                    result.append(
+                        pytesseract.image_to_string(img, lang="rus+eng")
+                    )
+                except Exception as e:
+                    exc_holder.append(e)
+
+            t = threading.Thread(target=_do_ocr, daemon=True)
+            t.start()
+            t.join(timeout=OCR_TIMEOUT)
+            if t.is_alive():
+                logger.warning(
+                    "OCR timeout on page %d of %s — skipping remaining pages",
+                    i, filepath,
+                )
+                break
+            if exc_holder:
+                logger.warning("OCR error on page %d: %s", i, exc_holder[0])
+                continue
+            if result:
+                texts.append(result[0])
+
         return "\n".join(texts).strip()
     except Exception as exc:
         logger.error("OCR failed for PDF %s: %s", filepath, exc)
