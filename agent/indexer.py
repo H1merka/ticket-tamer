@@ -10,9 +10,12 @@ Pipeline stages:
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
 import re
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -25,6 +28,11 @@ from app.models.kb_chunk import KBChunk
 from app.models.knowledge_base import KnowledgeBaseArticle
 
 logger = logging.getLogger(__name__)
+
+# Thread pool for CPU-bound file parsing (PDF OCR, DOCX, Excel)
+_file_parse_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="indexer")
+# Semaphore limits concurrent file-parse tasks to avoid memory spikes
+_parse_semaphore = asyncio.Semaphore(4)
 
 
 # ---------------------------------------------------------------------------
@@ -44,8 +52,38 @@ def load_document(filepath: str) -> str:
         return _load_html(filepath)
     elif suffix == ".txt":
         return path.read_text(encoding="utf-8", errors="replace")
+    elif suffix in (".xls", ".xlsx"):
+        return _parse_excel(filepath)
     else:
         raise ValueError(f"Unsupported file format: {suffix}")
+
+
+async def load_document_async(filepath: str) -> str:
+    """Load a document in a thread pool to avoid blocking the event loop.
+
+    Uses a semaphore to cap concurrent file-parse operations (prevents
+    memory spikes from multiple simultaneous OCR / large-file loads).
+    """
+    loop = asyncio.get_running_loop()
+    async with _parse_semaphore:
+        return await loop.run_in_executor(_file_parse_pool, load_document, filepath)
+
+
+def compute_content_hash(filepath: str) -> str:
+    """Compute SHA-256 hash of a file for change detection."""
+    h = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        while True:
+            chunk = f.read(8192)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def compute_text_hash(text: str) -> str:
+    """Compute SHA-256 hash of text content for change detection."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _load_html(filepath: str) -> str:
@@ -57,6 +95,47 @@ def _load_html(filepath: str) -> str:
     for tag in soup(["script", "style", "nav", "footer", "header"]):
         tag.decompose()
     return soup.get_text(separator="\n")
+
+
+def _parse_excel(filepath: str) -> str:
+    """Extract text from XLS/XLSX files using openpyxl (xlsx) or xlrd (xls)."""
+    path = Path(filepath)
+    rows_text: list[str] = []
+
+    if path.suffix.lower() == ".xlsx":
+        from openpyxl import load_workbook
+
+        wb = load_workbook(filepath, read_only=True, data_only=True)
+        for ws in wb.worksheets:
+            rows_text.append(f"--- Лист: {ws.title} ---")
+            for row in ws.iter_rows(values_only=True):
+                cells = [str(c).strip() for c in row if c is not None]
+                if cells:
+                    rows_text.append(" | ".join(cells))
+        wb.close()
+    else:
+        # .xls via xlrd
+        try:
+            import xlrd
+
+            wb = xlrd.open_workbook(filepath)
+            for sheet in wb.sheets():
+                rows_text.append(f"--- Лист: {sheet.name} ---")
+                for rx in range(sheet.nrows):
+                    cells = [
+                        str(sheet.cell_value(rx, cx)).strip()
+                        for cx in range(sheet.ncols)
+                        if sheet.cell_value(rx, cx)
+                    ]
+                    if cells:
+                        rows_text.append(" | ".join(cells))
+        except ImportError:
+            logger.warning(
+                "xlrd not installed — cannot parse .xls file: %s", filepath,
+            )
+            return ""
+
+    return "\n".join(rows_text)
 
 
 # ---------------------------------------------------------------------------
@@ -84,8 +163,8 @@ def clean_text(raw: str) -> str:
 
 def chunk_text(
     text: str,
-    chunk_size: int = 500,
-    overlap: int = 50,
+    chunk_size: int = 1200,
+    overlap: int = 100,
 ) -> list[str]:
     """Split text into overlapping chunks using recursive strategy.
 
@@ -161,15 +240,30 @@ async def index_document(
     source_type: str = "official_docs",
     category: str = "general",
     url: str | None = None,
-    chunk_size: int = 500,
-    overlap: int = 50,
+    chunk_size: int = 1200,
+    overlap: int = 100,
 ) -> tuple[int, int]:
     """Full indexing pipeline: load → clean → chunk → embed → store.
 
-    Returns (article_id, chunks_created).
+    Uses async file loading (thread pool) and content hashing for
+    incremental re-indexing.  Returns (article_id, chunks_created).
     """
-    # Load & clean
-    raw_text = load_document(filepath)
+    # Compute content hash for change detection
+    file_hash = await asyncio.get_running_loop().run_in_executor(
+        _file_parse_pool, compute_content_hash, filepath,
+    )
+
+    # Check if already indexed with same content
+    existing = await _find_article_by_hash(db, file_hash)
+    if existing is not None:
+        logger.debug(
+            "File %s unchanged (hash=%s…), skipping re-index",
+            filepath, file_hash[:12],
+        )
+        return (existing.id, 0)
+
+    # Load & clean (in thread pool to avoid blocking event loop)
+    raw_text = await load_document_async(filepath)
     cleaned = clean_text(raw_text)
 
     if not cleaned:
@@ -192,6 +286,7 @@ async def index_document(
         priority=10 if source_type == "official_docs" else 1,
         file_path=filepath,
         url=url,
+        content_hash=file_hash,
     )
     db.add(article)
     await db.flush()
@@ -224,8 +319,8 @@ async def index_document(
 
     await db.flush()
     logger.info(
-        "Indexed %d chunks for article_id=%d from %s",
-        len(chunks), article.id, filepath,
+        "Indexed %d chunks for article_id=%d from %s (hash=%s…)",
+        len(chunks), article.id, filepath, file_hash[:12],
     )
     return (article.id, len(chunks))
 
@@ -237,13 +332,23 @@ async def index_text(
     category: str = "general",
     priority: int = 1,
     title: str = "support_ticket",
-    chunk_size: int = 500,
-    overlap: int = 50,
+    chunk_size: int = 1200,
+    overlap: int = 100,
 ) -> tuple[int, int]:
-    """Index raw text directly (e.g. from a closed ticket's Q+A)."""
+    """Index raw text directly (e.g. from a closed ticket's Q+A).
+
+    Uses content hashing to skip re-indexing identical text.
+    """
     cleaned = clean_text(text)
     if not cleaned:
         return (0, 0)
+
+    # Content hash for dedup
+    text_hash = compute_text_hash(cleaned)
+    existing = await _find_article_by_hash(db, text_hash)
+    if existing is not None:
+        logger.debug("Text already indexed (hash=%s…), skipping", text_hash[:12])
+        return (existing.id, 0)
 
     chunks = chunk_text(cleaned, chunk_size=chunk_size, overlap=overlap)
     if not chunks:
@@ -255,6 +360,7 @@ async def index_text(
         answer=cleaned[:500],
         source_type=source_type,
         priority=priority,
+        content_hash=text_hash,
     )
     db.add(article)
     await db.flush()
@@ -281,3 +387,22 @@ async def index_text(
 
     await db.flush()
     return (article.id, len(chunks))
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+async def _find_article_by_hash(
+    db: AsyncSession,
+    content_hash: str,
+) -> KnowledgeBaseArticle | None:
+    """Find an existing article by its content hash (for incremental re-index)."""
+    from sqlalchemy import select
+
+    result = await db.execute(
+        select(KnowledgeBaseArticle)
+        .where(KnowledgeBaseArticle.content_hash == content_hash)
+        .limit(1)
+    )
+    return result.scalar_one_or_none()

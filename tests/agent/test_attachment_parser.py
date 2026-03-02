@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from agent.attachment_parser import (
-    MAX_FILE_SIZE,
     parse_attachment,
     parse_attachments,
     _parse_pdf,
@@ -30,11 +29,12 @@ class TestParseAttachment:
         assert result == ""
 
     @pytest.mark.asyncio
-    async def test_file_too_large(self, tmp_path: Path):
+    async def test_large_file_still_processed(self, tmp_path: Path):
         big = tmp_path / "big.pdf"
-        big.write_bytes(b"x" * (MAX_FILE_SIZE + 1))
-        result = await parse_attachment(str(big), "application/pdf")
-        assert result == ""
+        big.write_bytes(b"x" * (30 * 1024 * 1024))  # 30 MB
+        with patch("agent.attachment_parser._parse_pdf", return_value="big pdf text"):
+            result = await parse_attachment(str(big), "application/pdf")
+        assert result == "big pdf text"
 
     @pytest.mark.asyncio
     async def test_unsupported_content_type(self, tmp_path: Path):
@@ -111,14 +111,16 @@ class TestParseAttachments:
         assert result == ""
 
     @pytest.mark.asyncio
-    async def test_oversized_data_skipped(self):
+    async def test_large_data_still_processed(self):
         att = {
             "filename": "huge.pdf",
             "content_type": "application/pdf",
-            "data": b"x" * (MAX_FILE_SIZE + 1),
+            "data": b"x" * (30 * 1024 * 1024),  # 30 MB
         }
-        result = await parse_attachments([att])
-        assert result == ""
+        with patch("agent.attachment_parser.parse_attachment", new_callable=AsyncMock, return_value="big text"):
+            result = await parse_attachments([att])
+        assert "huge.pdf" in result
+        assert "big text" in result
 
     @pytest.mark.asyncio
     async def test_audio_attachment_routed_to_transcriber(self):
