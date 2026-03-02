@@ -166,12 +166,16 @@ async def test_embed_batch_returns_vectors():
 @pytest.mark.asyncio
 async def test_embed_batch_handles_batching():
     """Large input is split into batches."""
-    mock_emb = MagicMock()
-    mock_emb.embedding = [0.1] * 1024
-    mock_response = MagicMock()
-    mock_response.data = [mock_emb]
+    def _make_response(n: int):
+        resp = MagicMock()
+        resp.data = [MagicMock(embedding=[0.1] * 1024) for _ in range(n)]
+        return resp
+
+    # 5 texts, batch_size=2 → batches of 2, 2, 1
     mock_client = AsyncMock()
-    mock_client.embeddings.create = AsyncMock(return_value=mock_response)
+    mock_client.embeddings.create = AsyncMock(
+        side_effect=[_make_response(2), _make_response(2), _make_response(1)]
+    )
 
     texts = [f"text_{i}" for i in range(5)]
 

@@ -154,6 +154,7 @@ class TestCreateUser:
     @pytest.mark.asyncio
     async def test_creates_user(self):
         db = AsyncMock()
+        db.add = MagicMock()
         result = await create_user(db, "newuser", "pass1234", full_name="Test User")
         db.add.assert_called_once()
         db.flush.assert_awaited_once()

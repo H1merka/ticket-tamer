@@ -74,6 +74,7 @@ class TestCreateArticle:
     @pytest.mark.asyncio
     async def test_creates_and_flushes(self):
         db = AsyncMock()
+        db.add = MagicMock()
         data = KBArticleCreate(category="test", question="Q", answer="A")
 
         await create_article(db, data)

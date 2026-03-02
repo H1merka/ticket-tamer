@@ -16,12 +16,32 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import JSON, String, Text, event
 from sqlalchemy import StaticPool
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.database import Base, get_db
 from app.dependencies import get_current_user
 from app.models.user import User
+
+
+# ---------------------------------------------------------------------------
+# Patch PostgreSQL-specific column types so SQLite can compile them
+# ---------------------------------------------------------------------------
+
+def _patch_pg_columns_for_sqlite():
+    """Replace JSONB / Vector column types with SQLite-compatible equivalents.
+
+    Must be called before ``Base.metadata.create_all``.
+    """
+    for table in Base.metadata.tables.values():
+        for col in table.columns:
+            type_name = type(col.type).__name__
+            if type_name in ("JSONB", "JSON"):
+                col.type = JSON()
+            elif type_name == "Vector":
+                # pgvector Vector(1024) → nullable TEXT (not used in SQLite tests)
+                col.type = Text()
 
 
 # ---------------------------------------------------------------------------
@@ -42,6 +62,7 @@ def event_loop():
 
 @pytest_asyncio.fixture()
 async def async_engine():
+    _patch_pg_columns_for_sqlite()
     engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
         connect_args={"check_same_thread": False},
@@ -92,6 +113,7 @@ async def client(db_session: AsyncSession, fake_user: User) -> AsyncGenerator[As
     """
     # Import app lazily to avoid import-time side effects (scheduler, etc.)
     from app.main import app
+    from app.routers.export import _get_export_user
 
     async def _override_get_db():
         yield db_session
@@ -101,6 +123,7 @@ async def client(db_session: AsyncSession, fake_user: User) -> AsyncGenerator[As
 
     app.dependency_overrides[get_db] = _override_get_db
     app.dependency_overrides[get_current_user] = _override_get_current_user
+    app.dependency_overrides[_get_export_user] = _override_get_current_user
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

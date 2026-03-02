@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -128,7 +128,7 @@ async def test_find_best_matches_with_results():
 
     mock_db = AsyncMock()
     # Mock DB execute to return empty result sets (no actual pgvector)
-    mock_result = AsyncMock()
+    mock_result = MagicMock()
     mock_result.fetchall.return_value = []
     mock_db.execute = AsyncMock(return_value=mock_result)
 

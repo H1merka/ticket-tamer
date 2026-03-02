@@ -108,6 +108,7 @@ class TestCreateTicket:
     @pytest.mark.asyncio
     async def test_creates_and_flushes(self):
         db = AsyncMock()
+        db.add = MagicMock()
         data = TicketCreate(
             email_from="x@y.com", subject="S", body="B",
         )
